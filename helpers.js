@@ -3,21 +3,19 @@ export function numberToWords(n) {
   if (n > 999999) return n.toLocaleString(); // fallback for > 999,999
 
   const ones = [
-    '', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine',
-    'ten', 'eleven', 'twelve', 'thirteen', 'fourteen', 'fifteen',
-    'sixteen', 'seventeen', 'eighteen', 'nineteen'
+    '', 'un', 'deux', 'trois', 'quatre', 'cinq', 'six', 'sept', 'huit', 'neuf', 
+    'dix', 'onze', 'douze','treize','quatorze','quinze', 'seize', 'dix-sept', 'dix-huit','dix-neuf'
   ];
 
   const tens = [
-    '', '', 'twenty', 'thirty', 'forty', 'fifty',
-    'sixty', 'seventy', 'eighty', 'ninety'
+    '', '', 'vingt', 'trente', 'quarante','cinquante','soixante','soixante-dix', 'quatre-vingts','quatre-vingt-dix'
   ];
 
   const thousand = (n) => {
     if (n < 20) return ones[n];
     if (n < 100) return tens[Math.floor(n / 10)] + (n % 10 ? '-' + ones[n % 10] : '');
     if (n < 1000) {
-      return ones[Math.floor(n / 100)] + ' hundred' +
+      return ones[Math.floor(n / 100)] + ' cent' +
         (n % 100 ? ' ' + thousand(n % 100) : '');
     }
   };
@@ -25,7 +23,7 @@ export function numberToWords(n) {
   let result = '';
 
   if (n >= 1000) {
-    result += thousand(Math.floor(n / 1000)) + ' thousand';
+    result += thousand(Math.floor(n / 1000)) + ' mille';
     if (n % 1000) {
       result += ' ' + thousand(n % 1000);
     }
@@ -37,65 +35,56 @@ export function numberToWords(n) {
 }
 
 export const numberWords = {
-    'zero': 0,
-    'one': 1,
-    'two': 2,
-    'three': 3,
-    'four': 4,
-    'five': 5,
+    'zéro': 0,
+    'un': 1,
+    'deux': 2,
+    'trois': 3,
+    'quatre': 4,
+    'cinq': 5,
     'six': 6,
-    'seven': 7,
-    'eight': 8,
-    'nine': 9,
+    'sept': 7,
+    'huit': 8,
+    'neuf': 9,
 
-    'ten': 10,
-    'eleven': 11,
-    'twelve': 12,
-    'thirteen': 13,
-    'fourteen': 14,
-    'fifteen': 15,
-    'sixteen': 16,
-    'seventeen': 17,
-    'eighteen': 18,
-    'nineteen': 19,
+    'dix': 10,
+    'onze': 11,
+    'douze': 12,
+    'treize': 13,
+    'quatorze': 14,
+    'quinze': 15,
+    'seize': 16,
+    'dix-sept': 17,
+    'dix-huit': 18,
+    'dix-neuf': 19,
 
-    'twenty': 20,
-    'thirty': 30,
-    'forty': 40,
-    'fifty': 50,
-    'sixty': 60,
-    'seventy': 70,
-    'eighty': 80,
-    'ninety': 90,
+    'vingt': 20,
+    'trente': 30,
+    'quarante': 40,
+    'cinquante': 50,
+    'soixante': 60,
+    'soixante-dix': 70,
+    'quatre-vingts': 80,
+    'quatre-vingt-dix': 90,
 
-    'hundred': 100,
-    'thousand': 1000,
+    'cent': 100,
+    'mille': 1000,
     'million': 1000000,
-    'billion': 1000000000,
-    'trillion': 1000000000000,
+    'millard': 1000000000,
 
-    'infinity': Infinity,
-    'infinite': Infinity,
-    'half': 0.5,
+    'infinit': Infinity,
+    'infinits': Infinity,
+    'moitié': 0.5,
+    'moitiée': 0.5,
+    'moitiés': 0.5,
+    'moitiées': 0.5,
+    'demi': 0.5,
 
-    // plural forms
-    'ones': 1,
-    'twos': 2,
-    'threes': 3,
-    'fours': 4,
-    'fives': 5,
-    'sixes': 6,
-    'sevens': 7,
-    'eights': 8,
-    'nines': 9,
-
-    'tens': 10,
-    'dozens': 12,
-    'hundreds': 100,
-    'thousands': 1000,
+    'dizaines': 10,
+    'douzaines': 12,
+    'centaines': 100,
+    'milliers': 1000,
     'millions': 1000000,
-    'billions': 1000000000,
-    'trillions': 1000000000000
+    'milliards': 1000000000
   };
 
 export function markSpelledOutNumbers(adjacencyList) {
@@ -125,7 +114,7 @@ export function markSpelledOutNumbers(adjacencyList) {
 }
 
 // helper to check hyphenated numbers
-export function isHyphenatedNumber(word, numberWords) {
+export function isHyphenatedNumber(word, numberWords = 2) {
   if (!word.includes('-')) return false;
   const [part1, part2] = word.split('-');
   return numberWords.hasOwnProperty(part1) && numberWords.hasOwnProperty(part2);

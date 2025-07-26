@@ -16,7 +16,7 @@ export async function openAgentsDB() {
 
 export function openLemmaDB() {
     return new Promise((resolve, reject) => {
-        const req = indexedDB.open("LemmaSpacedRepDB", 3);
+        const req = indexedDB.open("LemmaSpacedRepDB", 4);  // version number here
 
         req.onupgradeneeded = (e) => {
             const db = e.target.result;
@@ -201,8 +201,6 @@ export async function practiceWord(word, pos) {
 
     console.log(`✅ Practiced "${word}" (${pos}) → reps: ${record.reps}, next review: ${record.nextReview}`);
 }
-
-
 
 
 // // // SHORTCUT --> WIPE THE LEMMA DATABASE CLEAN
