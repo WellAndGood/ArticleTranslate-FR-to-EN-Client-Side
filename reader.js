@@ -103,6 +103,10 @@ async function loadAndRenderArticle() {
         // ✅ Render article body
         renderTextBlock(articleText, contentContainer, 'p');
 
+        document.getElementById("placeholder").style.display = "none";
+        const contentDiv = document.getElementById("mainContent");
+        contentDiv.style.display = "block";
+
         // For API analysis
         // await sendArticleTextForAnalysis(articleText);
 
@@ -157,37 +161,33 @@ async function loadAndRenderArticle() {
 
 
 async function loadWordList() {
-    // const url = chrome.runtime.getURL('v1.1-wordFrequency_FR_to_EN.json');
-    const url = chrome.runtime.getURL('v1.3.1-wordFrequency_FR_to_EN.json');
+    const url = chrome.runtime.getURL('v1.3.5-wordFrequency_FR_to_EN.json');
     console.log(url);
     const response = await fetch(url);
     const json = await response.json();
     
     // wordList = json.wordForms;
     wordList = json;
-    
-    console.log(wordList);
 
     console.log("Loaded", wordList.length, "word forms.");
 
     wordList.forEach(entry => {
-        if (entry.FrenchWord) {
+
+        if (entry !== undefined && entry !== null && 'FrenchWord' in entry) {
             lemmaSet.add(entry.FrenchWord.toLowerCase());
         }
     });
 
     contractionSuffixes = wordList
-        .filter(entry => entry.FrenchWord && entry.FrenchWord?.startsWith("'"))
+        .filter(entry => entry?.FrenchWord && entry?.FrenchWord?.startsWith("'"))
         .map(entry => entry.FrenchWord?.toLowerCase());
 
     hyphenatedWords = wordList
-        .filter(entry => entry.FrenchWord && entry.FrenchWord?.includes('-'))
-        .map(entry => entry.FrenchWord?.toLowerCase());
+        .filter(entry => entry?.FrenchWord && entry?.FrenchWord?.includes('-'))
+        .map(entry => entry?.FrenchWord?.toLowerCase());
 
 
     top5000Lemmas = lemmaSet;
-    console.log(top5000Lemmas);
-    console.log(lemmaSet);
 }
 
 function normalizeApostrophes(text) {
@@ -196,14 +196,6 @@ function normalizeApostrophes(text) {
 
 function splitIntoSentences(text) {
     return text.match(/[^.!?]+[.!?]+(\s|$)/g) || [text];
-}
-
-function generateSafeName(text) {
-    if (text === undefined) return "";
-    return text
-        // .replace(/[^\w\s]|_/g, '')   // Remove punctuation
-        .replace(/\s+/g, '')          // Remove all spaces
-        .toLowerCase();               // Optional: make lowercase for consistency
 }
 
 async function renderTextBlock(text, containerElement, wrapperTag = 'p') {
@@ -229,9 +221,24 @@ async function renderTextBlock(text, containerElement, wrapperTag = 'p') {
 
         sentenceSpacy.forEach(token => {
 
-        // sentence.trim().split(/\s+/).forEach(word => {
+            const isHyphen = token.text === '-' || token.text === '‐' || token.text === '-'; // U+2010/U+2011 too
+            const isPunct = token.is_punct || isHyphen;
 
-            // const cleanedWord = cleanWordForMatching(word);
+            // Special-case actual hyphen: keep it inline as text, no box, no translation, no extra space
+            if (isHyphen) {
+                const wordDiv = document.createElement('div');
+                wordDiv.classList.add('word');
+
+                const wordTextSpan = document.createElement('span');
+                wordTextSpan.classList.add('word-text');
+                wordTextSpan.textContent = '-'; // ✅ set the visible hyphen
+
+                wordDiv.appendChild(wordTextSpan);
+                addTranslation(wordDiv, '-');
+                block.appendChild(wordDiv); // no surrounding spaces
+                return;
+            }
+
             const parts = getLemmaRankWithParts(token.lemma);
 
             if (parts) {
@@ -239,7 +246,6 @@ async function renderTextBlock(text, containerElement, wrapperTag = 'p') {
                     const wordDiv = document.createElement('div');
                     wordDiv.classList.add('word');
 
-                    // const safeWord = generateSafeName(part.text);
                     const currentIndex = wordIndex++;
                     wordDiv.setAttribute('data-name', token.text);
                     wordDiv.setAttribute('data-index', currentIndex);
@@ -250,6 +256,9 @@ async function renderTextBlock(text, containerElement, wrapperTag = 'p') {
                     wordTextSpan.classList.add('word-text');
                     wordTextSpan.textContent = token.text_with_ws;
                     wordDiv.appendChild(wordTextSpan);
+                    
+                    // add the always-visible translation line
+                    addTranslation(wordDiv, part.lemma);
 
                     // If ranked, highlight & attach tooltip logic
                     if (part.rank !== 9999) {
@@ -261,7 +270,8 @@ async function renderTextBlock(text, containerElement, wrapperTag = 'p') {
                             const tooltip = document.createElement('div');
                             tooltip.className = 'custom-tooltip';
                             tooltip.innerHTML = `
-                                <strong>Word:</strong> ${token.text} - <strong>Base Word:</strong> ${token.lemma}<br/>    
+                                <strong>Word:</strong> ${token.text}<br/>
+                                <strong>Base Word:</strong> ${token.lemma}<br/>    
                                 <strong>Rank:</strong> ${part.rank} - <strong>Lemma:</strong> ${part.lemma}<br/>
                                 <strong>Part of Speech:</strong> ${posFull}`;
                             wordDiv.appendChild(tooltip);
@@ -310,7 +320,6 @@ async function renderTextBlock(text, containerElement, wrapperTag = 'p') {
                 const wordDiv = document.createElement('div');
                 wordDiv.classList.add('word');
 
-                // const safeWord = generateSafeName(word);
                 const currentIndex = wordIndex++;
                 wordDiv.setAttribute('data-name', token.text);
                 wordDiv.setAttribute('data-index', currentIndex);
@@ -320,6 +329,9 @@ async function renderTextBlock(text, containerElement, wrapperTag = 'p') {
                 wordTextSpan.classList.add('word-text');
                 wordTextSpan.textContent = token.text_with_ws;
                 wordDiv.appendChild(wordTextSpan);
+
+                // Use token.text (or your own map) as the literal translation
+                addTranslation(wordDiv, token.text);
 
                 adjacencyList.push({
                     index: currentIndex,
@@ -372,6 +384,25 @@ async function renderTextBlock(text, containerElement, wrapperTag = 'p') {
     chrome.storage.local.remove(['exportedArticle', 'exportedTitle']);
 }
 
+function addTranslation(wordDiv, englishLemmaText) {
+  const translationDiv = document.createElement('div');
+  translationDiv.classList.add('translation');
+  translationDiv.textContent = englishLemmaText || ''; // later: include morph features
+  wordDiv.appendChild(translationDiv);
+}
+
+const toggleBtn = document.getElementById('toggleTranslationsBtn');
+
+toggleBtn.addEventListener('click', () => {
+  document.body.classList.toggle('hide-translations');
+  
+  if (document.body.classList.contains('hide-translations')) {
+    toggleBtn.textContent = 'Show Translations';
+  } else {
+    toggleBtn.textContent = 'Hide Translations';
+  }
+});
+
 async function sendToSpacy(sentence) {
     try {
         const response = await fetch('http://127.0.0.1:5000/spacy/fr', {
@@ -420,7 +451,7 @@ async function markAgentsInAdjacencyList(adjacencyList) {
 
         // Skip single-word company if needed
         if (agentLen === 1 && agent.type === 'company') {
-            if (top5000Lemmas.has(agent.FrenchWord[0])) {
+            if (top5000Lemmas.has(agent?.FrenchWord[0])) {
                 continue
             }
         }
@@ -682,7 +713,7 @@ async function buildTop15WordList(articleText) {
 
     // Collect all candidate lemmas from article
     words.forEach(word => {
-        const entry = wordList.find(e => e.FrenchWord?.toLowerCase() === word);
+        const entry = wordList.find(e => e?.FrenchWord?.toLowerCase() === word);
         if (entry) {
             const lemma = entry.lemma;
             if (!wordFrequency[lemma]) {
@@ -691,7 +722,7 @@ async function buildTop15WordList(articleText) {
                     rank: parseInt(entry.rank),
                     partOfSpeech: entry.PoS,
                     count: 0,
-                    word: entry.FrenchWord
+                    word: entry?.FrenchWord
                 };
             }
             wordFrequency[lemma].count++;
@@ -842,7 +873,7 @@ function getLemmaRankForWord(word) {
 }
 
 function getWordEntry(word) {
-    return wordList.find(entry => entry.FrenchWord && entry.FrenchWord?.toLowerCase() === word.toLowerCase()) || null;
+    return wordList.find(entry => entry?.FrenchWord && entry.FrenchWord?.toLowerCase() === word.toLowerCase()) || null;
 }
 
 function getLemmaRankWithParts(word) {
