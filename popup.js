@@ -5,6 +5,23 @@ let articleTitle = "";  // Store the article title globally in the popup scope
 document.addEventListener('DOMContentLoaded', () => {
     console.log('Popup loaded...');
 
+    const checkbox = document.getElementById('useGoogleTranslate');
+    const statusEl = document.getElementById('gtStatus');
+
+    // Load saved value; default true
+    chrome.storage.local.get(['useGoogleTranslate'], (res) => {
+        const current = res.useGoogleTranslate !== undefined ? !!res.useGoogleTranslate : true;
+        checkbox.checked = current;
+        if (statusEl) statusEl.textContent = current ? 'Translations enabled' : 'Translations disabled';
+    });
+
+    // Keep it up to date when user clicks checkbox
+    checkbox.addEventListener('change', () => {
+        chrome.storage.local.set({ useGoogleTranslate: checkbox.checked }, () => {
+            if (statusEl) statusEl.textContent = checkbox.checked ? 'Translations enabled' : 'Translations disabled';
+        });
+    });
+
     const button = document.getElementById("openReader");
     const output = document.getElementById("output");
     const exportButton = document.getElementById("exportButton");
@@ -41,7 +58,6 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }); 
 
-
     button.addEventListener("click", async () => {
         console.log("Button clicked...");
 
@@ -58,7 +74,7 @@ document.addEventListener('DOMContentLoaded', () => {
         // Step 2: Run Readability on the active page
         chrome.scripting.executeScript({
             target: { tabId: tab.id },
-            func: runReadabilitySafely 
+            func: runReadabilitySafely
         }, (results) => {
             if (chrome.runtime.lastError) {
                 console.error(chrome.runtime.lastError.message);
@@ -72,7 +88,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
             articleTitle = result.title;
             console.log("articleTitle", articleTitle)
-            let articleText = result.content;
+
+
+            let articleHtml = result.content;         // <-- Readability HTML
+            let articleText = headingsToNewlines(articleHtml); // <-- Plain text w/ heading newlines
 
             articleText = cleanSpacing(articleText);
             articleText = addNewlinesAfterSentences(articleText);
@@ -103,11 +122,15 @@ document.addEventListener('DOMContentLoaded', () => {
                 return;
             }
 
+            console.log("article text:", lastExtractedArticle);
+
             console.log("articleTitle", articleTitle);
+            const useGoogleTranslate = checkbox ? !!checkbox.checked : true;
 
             chrome.storage.local.set({
                 exportedArticle: lastExtractedArticle,
-                exportedTitle: articleTitle
+                exportedTitle: articleTitle,
+                useGoogleTranslate
             }, () => {
                 console.log("Article text and title saved to chrome.storage. Opening reader...");
                 chrome.tabs.create({
@@ -122,11 +145,11 @@ function runReadabilitySafely() {
     try {
         const docClone = document.cloneNode(true);
         const article = new Readability(docClone).parse();
-        console.log("Readability article parsed:", article);
+        // console.log("Readability article parsed:", article);
         if (article) {
             return {
                 title: article.title,
-                content: article.textContent
+                content: article.content
             };
         } else {
             return {
@@ -140,6 +163,28 @@ function runReadabilitySafely() {
             content: "Error running Readability: " + error.message
         };
     }
+}
+
+function headingsToNewlines(html) {
+    // Parse the HTML string safely
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+
+    // Insert newlines before and after all headings
+    doc.body.querySelectorAll('h1,h2,h3,h4,h5,h6').forEach(h => {
+        const text = h.textContent.trim();
+        const meaningful = text && text.split(/\s+/).length >= 2;
+        const nextBlock = h.nextElementSibling;
+        const nextIsTexty = nextBlock && /^(P|DIV|UL|OL)$/i.test(nextBlock.tagName) &&
+                            (nextBlock.textContent.trim().length > 40);
+        if (!meaningful || !nextIsTexty) h.remove(); // heuristic
+        h.insertAdjacentText('beforebegin', '\n');
+        h.insertAdjacentText('afterend', '.\n');
+    });
+
+    // Get plain text; trim and normalize extra blank lines
+    return doc.body.textContent
+        .replace(/\n{3,}/g, '\n\n')
+        .trim();
 }
 
 function cleanSpacing(text) {

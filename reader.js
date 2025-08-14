@@ -6,6 +6,7 @@ let wordIndex = 0;  // Global counter across all sentences
 let wordList = [];
 let contractionSuffixes = [];
 let hyphenatedWords = [];
+let useGoogleTranslate = false;
 
 const selectedIndexes = new Set();
 let justDragged = false; // to prevent continuous dragging after mouse release
@@ -76,9 +77,10 @@ async function initReaderPage() {
 initReaderPage();
 
 async function loadAndRenderArticle() {
-    chrome.storage.local.get(['exportedArticle', 'exportedTitle'], async (result) => {
+    chrome.storage.local.get(['exportedArticle', 'exportedTitle','useGoogleTranslate'], async (result) => {
         const articleText = result.exportedArticle || "No article found.";
         const articleTitle = result.exportedTitle || "Untitled Article";
+        useGoogleTranslate = result.useGoogleTranslate !== undefined ? !!result.useGoogleTranslate : true;
 
         const isInitialized = await new Promise(res => {
             chrome.storage.local.get(['initialized'], result => res(result.initialized));
@@ -88,6 +90,7 @@ async function loadAndRenderArticle() {
 
         console.log("isInitialized:", isInitialized);
         console.log("debug: ", debug);
+        console.log("articleText", articleText)
 
         if (!isInitialized || debug) {
             await initializeLemmas(wordList);
@@ -97,30 +100,49 @@ async function loadAndRenderArticle() {
         titleContainer.innerHTML = '';
         contentContainer.innerHTML = '';
 
-        // ✅ Render title with the same word highlighting logic
-        renderTextBlock(articleTitle, titleContainer, 'h1');
+        startLoading();
+        try {
+            // ✅ Render title with the same word highlighting logic
+            renderTextBlock(articleTitle, titleContainer, 'h1');
 
-        // ✅ Render article body
-        renderTextBlock(articleText, contentContainer, 'p');
+            // ✅ Render article body
+            renderTextBlock(articleText, contentContainer, 'p');   
 
-        document.getElementById("placeholder").style.display = "none";
-        const contentDiv = document.getElementById("mainContent");
-        contentDiv.style.display = "block";
+            await markAgentsInAdjacencyList(adjacencyList);
+            markProminentNumbers(adjacencyList);  // digit check and mark with .prominent-digit
+            attachNumberTooltips(adjacencyList);  // affix a tooltip to .prominent-digit
 
-        // For API analysis
-        // await sendArticleTextForAnalysis(articleText);
+            markSpelledOutNumbers(adjacencyList); // digit check and mark with .prominent-number
+            attachNumberHover(adjacencyList);     // affix a tooltip to .prominent-number
+        } finally {
+            finishLoading();  
 
-        await markAgentsInAdjacencyList(adjacencyList);
-        markProminentNumbers(adjacencyList);  // digit check and mark with .prominent-digit
-        attachNumberTooltips(adjacencyList);  // affix a tooltip to .prominent-digit
-
-        markSpelledOutNumbers(adjacencyList); // digit check and mark with .prominent-number
-        attachNumberHover(adjacencyList);     // affix a tooltip to .prominent-number
-
-        console.log(adjacencyList);
-        console.log(adjacencyList.length, "words rendered in total.");
+            console.log(adjacencyList);
+            console.log(adjacencyList.length, "words rendered in total.");
+        }
     });
     chrome.storage.local.remove(['exportedArticle', 'exportedTitle']);
+}
+
+function startLoading(message = 'Loading…') {
+  const mc = document.getElementById('mainContent');
+  const ph = document.getElementById('placeholder');
+//   mc.style.display = 'block';
+  mc.classList.add('loading');
+//   ph.style.display = 'block';
+  ph.textContent = message;              // or insert spinner markup
+}
+
+function finishLoading() {
+  const mc = document.getElementById('mainContent');
+  const apiresp = document.getElementById('api-response');
+  const ph = document.getElementById('placeholder');
+  mc.classList.remove('loading');        // restores normal layout
+  mc.style.display = 'block';
+  ph.style.display = 'none';             // hide the placeholder
+  ph.textContent = '';
+  apiresp.style.display = 'none'; // hide the API response container
+
 }
 
 // // API CALL - EXPERIMENTAL
@@ -201,19 +223,32 @@ function splitIntoSentences(text) {
 async function renderTextBlock(text, containerElement, wrapperTag = 'p') {
 
     const sentences = splitIntoSentences(text);
-    sentences.forEach(async sentence => {
+    console.log(sentences);
 
-        const block = document.createElement(wrapperTag);
-        block.classList.add('sentence-block');
+    const blocks = sentences.map(() => {
+        const b = document.createElement(wrapperTag);
+        b.classList.add('sentence-block');
+        containerElement.appendChild(b);
+        return b;
+    });
 
-        const sentenceSpacy = await sendToSpacy(sentence);
-        console.log(sentenceSpacy);
+    await Promise.all(sentences.map((sentence, i) => fillSentenceBlock(blocks[i], sentence, wrapperTag)));
 
-        // 🎤 Create speaker button
+    if (wrapperTag === 'p') {
+        buildTop15WordList(text);
+    }
+
+    chrome.storage.local.remove(['exportedArticle', 'exportedTitle']);
+}
+
+async function fillSentenceBlock(block, sentence, wrapperTag) { 
+    // 🎤 Create speaker button
         const speakerBtn = document.createElement('button');
         speakerBtn.classList.add('sentence-speak-btn');
         speakerBtn.textContent = '🔊';
         block.appendChild(speakerBtn);
+
+        const sentenceSpacy = await sendToSpacy(sentence);
 
         const sentenceIndexes = [];
 
@@ -224,7 +259,6 @@ async function renderTextBlock(text, containerElement, wrapperTag = 'p') {
             const isHyphen = token.text === '-' || token.text === '‐' || token.text === '-'; // U+2010/U+2011 too
             const isPunct = token.is_punct || isHyphen;
 
-            // Special-case actual hyphen: keep it inline as text, no box, no translation, no extra space
             if (isHyphen) {
                 const wordDiv = document.createElement('div');
                 wordDiv.classList.add('word');
@@ -360,29 +394,23 @@ async function renderTextBlock(text, containerElement, wrapperTag = 'p') {
         });
 
         containerElement.appendChild(block);
-
-        // LOGIC START - FOR COMMENTING PURPOSES
-        // A div to display the translated sentence
-        // const translatedSentence = await translateSentence(sentence, 'en');
-        // const translateBlock = document.createElement(wrapperTag);
-        // translateBlock.classList.add('translate-sentence-block');
         
-        // // Places that div beneath the word-by-word native-language display
-        // const translationLabel = document.createElement('div');
-        // translationLabel.classList.add('sentence-translation');
-        // translationLabel.textContent = translatedSentence;
-        // console.log(translatedSentence);
-        // translateBlock.appendChild(translationLabel);
-        // block.appendChild(translateBlock);
-        // LOGIC END - FOR COMMENTING PURPOSES
-    })
+        if (useGoogleTranslate) {
+            // A div to display the translated sentence
+            const translatedSentence = await translateSentence(sentence, 'en');
+            const translateBlock = document.createElement(wrapperTag);
+            translateBlock.classList.add('translate-sentence-block');
 
-    if (wrapperTag === 'p') {
-        buildTop15WordList(text);
-    }
-
-    chrome.storage.local.remove(['exportedArticle', 'exportedTitle']);
+            // Places that div beneath the word-by-word native-language display
+            const translationLabel = document.createElement('div');
+            translationLabel.classList.add('sentence-translation');
+            translationLabel.textContent = translatedSentence;
+            console.log(translatedSentence);
+            translateBlock.appendChild(translationLabel);
+            block.appendChild(translateBlock);
+        }
 }
+
 
 function addTranslation(wordDiv, englishLemmaText) {
   const translationDiv = document.createElement('div');
@@ -397,9 +425,9 @@ toggleBtn.addEventListener('click', () => {
   document.body.classList.toggle('hide-translations');
   
   if (document.body.classList.contains('hide-translations')) {
-    toggleBtn.textContent = 'Show Translations';
+    toggleBtn.textContent = 'Show Word-For-Word Translations';
   } else {
-    toggleBtn.textContent = 'Hide Translations';
+    toggleBtn.textContent = 'Hide Word-For-Word Translations';
   }
 });
 
@@ -804,6 +832,8 @@ function speakWord(word = "") {
         text = word;
     }
 
+    console.log(word);
+
     const rate = parseFloat(document.getElementById('speechRate').value);
     const pitch = parseFloat(document.getElementById('speechPitch').value);
 
@@ -1025,7 +1055,7 @@ document.addEventListener('mouseup', () => {
         const wordDiv = document.querySelector(`.word[data-index="${index}"]`);
         const textSpan = wordDiv?.querySelector('.word-text');
         return textSpan ? textSpan.textContent.trim() : '';
-    }).join(' ');
+    }).join(' ').replace(/' /g, "'").replace(/’ /g, "'");
 
     document.getElementById('speechText').textContent = selectedWords;
 });
@@ -1082,7 +1112,7 @@ function openAgentPanel() {
 
     const agentInput = document.getElementById('agentInput');
     const selectedWords = getAllSelectedWords(contentContainer, titleContainer);
-    const properName = toTitleCase(selectedWords.join(' '));
+    const properName = toTitleCase(selectedWords.join(' ').replace(/' /g, "'").replace(/’ /g, "'"));
 
     agentInput.value = properName;
     mainContent.style.marginRight = '250px';
@@ -1116,7 +1146,7 @@ function showSpeechPanel() {
         const wordDiv = document.querySelector(`.word[data-index="${index}"]`);
         const textSpan = wordDiv?.querySelector('.word-text');
         return textSpan ? textSpan.textContent.trim() : '';
-    }).join(' ');
+    }).join(' ').replace(/' /g, "'").replace(/’ /g, "'");
 
     console.log(selectedWords);
 
@@ -1148,7 +1178,7 @@ function speakSelectedWords() {
         const wordDiv = document.querySelector(`.word[data-index="${index}"]`);
         const textSpan = wordDiv?.querySelector('.word-text');
         return textSpan ? textSpan.textContent.trim() : '';
-    }).join(' ');
+    }).join(' ').replace(/' /g, "'").replace(/’ /g, "'");
 
     speakWord(selectedWords);
 }
@@ -1189,7 +1219,7 @@ document.getElementById('closeAgentPanel').addEventListener('click', () => {
         mainContent.style.display = 'block';
     } else {
         mainContent.style.marginRight = '0';
-        mainContent.style.display = 'none';
+        // mainContent.style.display = 'none';
     }
 });
 

@@ -1,3 +1,17 @@
 body {
     min-width: 300px;
 }
+
+.inline-setting {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 8px 0 4px 0;
+}
+
+.muted {
+  display: block;
+  opacity: 0.7;
+  margin-top: 2px;
+  font-size: 12px;
+}
