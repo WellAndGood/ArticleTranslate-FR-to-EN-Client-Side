@@ -217,3 +217,139 @@ export function detectFrenchContraction(text, pos, morph) {
   if (t === "des" && morph?.Number === "Plur") return "de + les (or plural article)";
   return "";
 }
+
+const GAP = 10;            // pixels of breathing room to viewport edges
+const MAX_WIDTH = 360;    // must match CSS max-width
+
+export function showGlobalTooltip(anchorEl, html) {
+  if (!anchorEl || !(anchorEl instanceof Element)) return null;
+  
+  const tip = document.createElement('div');
+  tip.className = 'custom-tooltip';
+  tip.style.maxWidth = MAX_WIDTH + 'px';
+  tip.innerHTML = html;
+
+  // Keep a reference to the anchor so positionTooltip doesn't need a second arg
+  tip._anchor = anchorEl;
+  
+  tip.style.position = 'fixed';
+  tip.style.left = '-9999px';
+  tip.style.top = '0';
+  tip.style.opacity = '0';
+
+  document.body.appendChild(tip);
+
+  requestAnimationFrame(() => {
+    positionTooltip(tip);
+    tip.style.opacity = '1';
+  });
+
+  const onMove = () => positionTooltip(tip);
+  window.addEventListener('scroll', onMove, true);
+  window.addEventListener('resize', onMove);
+
+  tip._cleanup = () => {
+    window.removeEventListener('scroll', onMove, true);
+    window.removeEventListener('resize', onMove);
+    tip.remove()
+  }
+  return tip;
+}
+
+export function positionTooltip(tip) {
+  if (!tip || !tip._anchor) return;
+  const anchor = tip._anchor;
+  if (!anchor.isConnected) return; // anchor removed from DOM
+  
+  const rect = anchor.getBoundingClientRect();
+  const vw = window.innerWidth;
+  const vh = window.innerHeight;
+
+  // default to the right, vertically centered
+  let left = rect.right + GAP;
+  let top = rect.top + rect.height / 2 - tip.offsetHeight / 2;
+
+  // constrain vertical within viewport
+  top = Math.max(GAP, Math.min(vh - tip.offsetHeight - GAP, top));
+
+  tip.style.left = `${left}px`;
+  tip.style.top =`${top}px`;
+
+  // move to the left if overflowing right edge
+  const overflowRight = left + tip.offsetWidth + GAP > vw;
+  if (overflowRight) {
+    left = Math.max(GAP, rect.left - GAP - tip.offsetWidth);
+    tip.style.left = left + 'px';
+  }
+
+  // if still off-screen vertically, try below or above
+  if (top + tip.offsetHeight + GAP > vh) {
+    top = Math.max(GAP, rect.top - GAP - tip.offsetHeight); // above
+    tip.style.top = top + 'px';
+  } else if (top < GAP) {
+    top = Math.min(vh - tip.offsetHeight - GAP, rect.bottom + GAP); // bottom
+    tip.style.top = top + 'px';
+  }
+}
+
+function parseMorph(morph) {
+  if (!morph) return {};
+  if (typeof morph === 'string') {
+    // "PronType=Dem|Number=Sing" -> { PronType:"Dem", Number:"Sing" }
+    return Object.fromEntries(
+      morph.split('|').map(s => {
+        const [k, v] = s.split('=');
+        return [k, v];
+      })
+    );
+  }
+  return morph; // already an object
+}
+
+export function spacyPosToKey(pos, { text = "", lemma = "", morph = "" } = {}) {
+  const P = String(pos || "").toUpperCase();
+  const t = String(text || "").toLowerCase();
+  const l = String(lemma || "").toLowerCase();
+  const m = parseMorph(morph);
+
+  switch (P) {
+    case "NOUN":
+    case "PROPN":
+      return "n";
+    case "VERB":
+    case "AUX":
+      return "v";
+    case "ADJ":
+      return "j";
+    case "ADV":
+      if (NEG_WORDS.has(l) || NEG_WORDS.has(t)) return "x"; // e.g., "not"
+      return "r";
+    case "ADP":
+      return "i"; // preposition
+    case "DET":
+      // demonstratives → 'd', otherwise article/determiner → 'a'
+      if (m.PronType === "Dem") return "d";
+      return "a";
+    case "PRON":
+      return "p";
+    case "CCONJ":
+    case "SCONJ":
+      return "c";
+    case "PART":
+      if (t === "to" || l === "to") return "t"; // English infinitive marker
+      if (NEG_WORDS.has(l) || NEG_WORDS.has(t)) return "x"; // e.g., "n't"
+      return "x"; // other particles → bucket in x
+    case "NUM":
+      return "m";
+    case "INTJ":
+      return "u";
+    case "SYM":
+    case "X":
+      return "x";
+    case "PUNCT":
+    case "SPACE":
+      return null; // skip
+    default:
+      return "x"; // unknown → other
+  }
+}

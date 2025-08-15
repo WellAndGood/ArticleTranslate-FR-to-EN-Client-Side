@@ -1,5 +1,8 @@
 import { openAgentsDB, openLemmaDB, practiceWord, initializeLemmas, searchAgentsByName, countExactAgent, getAllAgents } from './databasehelpers.js';
-import { MORPH_MAP, ORDER_BY_POS, normalizeMorph, detectFrenchContraction, numberToWords, markSpelledOutNumbers, numberWords, isHyphenatedNumber } from './helpers.js';
+import { MORPH_MAP, ORDER_BY_POS, normalizeMorph, 
+         showGlobalTooltip, positionTooltip, spacyPosToKey,
+         detectFrenchContraction, numberToWords, 
+         markSpelledOutNumbers, numberWords, isHyphenatedNumber } from './helpers.js';
 import { APIKeyObtain } from './hiddenKeys.js';
 
 let wordIndex = 0;  // Global counter across all sentences
@@ -354,6 +357,10 @@ async function fillSentenceBlock(block, sentence, wrapperTag) {
         }
 
         const parts = getLemmaRankWithParts(token.lemma);
+        const morphStr = morphToEnglish(token.morph, token.pos, token.text);
+
+        const morphLines = (morphStr || 'N/A').split(',').map(s => s.trim())
+            .filter(Boolean).map(s => `<li class="morph-list">${s}</li>`).join('');
 
         if (parts) {
             parts.forEach(part => {
@@ -374,27 +381,27 @@ async function fillSentenceBlock(block, sentence, wrapperTag) {
                 // add the always-visible translation line
                 addTranslation(wordDiv, part.lemma);
 
-                const morphStr = morphToEnglish(token.morph, token.pos, token.text);
-
                 // If ranked, highlight & attach tooltip logic
                 if (part.rank !== 9999) {
                     wordDiv.classList.add('highlighted-word');
                     wordDiv.classList.add(getRankColorClass(part.rank));
                     const posFull = posMap[part.pos] || "Unknown POS";
 
-                    wordDiv.addEventListener('mouseenter', () => {
-                        const tooltip = document.createElement('div');
-                        tooltip.className = 'custom-tooltip';
-                        tooltip.innerHTML = `
-                            <strong>Rank:</strong> ${part.rank} - <strong>Lemma:</strong> ${part.lemma}<br/>
+                    wordDiv.addEventListener('mouseenter', (e) => {
+                        const anchor = e.currentTarget;
+                        const html = `
+                            <strong>Rank:</strong> ${part.rank} - <strong>Lemma (EN):</strong> ${part.lemma}<br/>
                             <strong>Part of Speech:</strong> ${posFull}<br/><br/>
-                            <strong>Morphological Features:</strong><br/><li>${morphStr.replace(/,\s*/g, '</li><br><li class="morph-list">') || 'N/A'}</li>`;
-                        wordDiv.appendChild(tooltip);
+                            <strong>Morphological Features:</strong><br/>
+                            <ul style="margin:.25rem 0 0 .9rem; padding:0;">${morphLines || 'N/A'}</ul>`;
+                        
+                        // keep a reference so we can remove it on mouseleave
+                        anchor._tip = showGlobalTooltip(anchor, html);
                     });
-
-                    wordDiv.addEventListener('mouseleave', () => {
-                        const existingTooltip = wordDiv.querySelector('.custom-tooltip');
-                        if (existingTooltip) existingTooltip.remove();
+                    wordDiv.addEventListener('mouseleave', (e) => {
+                        const tip = e.currentTarget._tip;
+                        tip?._cleanup?.();
+                        e.currentTarget._tip = null;
                     });
 
                     // Add pos-badge as separate child
@@ -443,6 +450,27 @@ async function fillSentenceBlock(block, sentence, wrapperTag) {
             const wordTextSpan = document.createElement('span');
             wordTextSpan.classList.add('word-text');
             wordTextSpan.textContent = token.text_with_ws;
+
+            const spacyPosToKey = spacyPosToLabel(token.pos, { text: token.text, lemma: token.lemma, morph: token.morph });
+
+            wordDiv.addEventListener('mouseenter', (e) => {              
+                const anchor = e.currentTarget;
+                const html = `
+                    <strong>Lemma (EN):</strong> ${token.lemma}<br/>
+                    <strong>Part of Speech:</strong> ${spacyPosToKey}<br/><br/>
+                    <strong>Morphological Features:</strong>
+                    <ul style="margin:.25rem 0 0 .9rem; padding:0;">${morphLines || 'N/A'}</li>`;
+                
+                anchor._tip = showGlobalTooltip(anchor, html);
+            });
+
+            wordDiv.addEventListener('mouseleave', (e) => {
+                const tip = e.currentTarget._tip;
+                tip?._cleanup?.();
+                e.currentTarget._tip = null;
+            });
+
+            wordTextSpan.textContent = token.text_with_ws;
             wordDiv.appendChild(wordTextSpan);
 
             // Use token.text (or your own map) as the literal translation
@@ -468,9 +496,7 @@ async function fillSentenceBlock(block, sentence, wrapperTag) {
 
         // select sentence words
         sentenceIndexes.forEach(idx => selectedIndexes.add(String(idx)));
-
         highlightSelectedWords(containerElement); // updates UI
-
         speakSelectedWords(); // speaks them
     });
     
@@ -489,6 +515,10 @@ async function fillSentenceBlock(block, sentence, wrapperTag) {
     }
 }
 
+function spacyPosToLabel(pos, opts) {
+    const key = spacyPosToKey(pos, opts);
+    return key ? posMap[key] : null;
+}
 
 function morphToEnglish(morphIn, pos = "", tokenText = "") {
   const morph = normalizeMorph(morphIn);
@@ -1598,5 +1628,20 @@ document.addEventListener('DOMContentLoaded', () => {
 
     pitchSlider.addEventListener('input', () => {
         pitchValue.textContent = pitchSlider.value;
+    });
+
+    // run after the DOM has your .word nodes
+    const words = document.querySelectorAll('.word');
+    console.log('[debug] .word count =', words.length);
+
+    words.forEach((el, i) => {
+    el.addEventListener('mouseenter', e => {
+        console.log('[debug] enter', i, e.currentTarget);
+        el.style.outline = '2px solid magenta';
+    });
+    el.addEventListener('mouseleave', () => {
+        console.log('[debug] leave', i);
+        el.style.outline = '';
+    });
     });
 });

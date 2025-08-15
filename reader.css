@@ -254,6 +254,7 @@ h3 {
   position: fixed;
   top: 5px;
   left: 50%;
+  top: 10%;
   transform: translateX(-50%);
   z-index: 1000;
   background: white;
@@ -431,11 +432,13 @@ h3 {
 }
 
 .custom-tooltip {
-  position: absolute;
-  background: rgba(0, 0, 0, 0.85);
-  color: white;
+  position: fixed;
+  z-index: 9999;
+  
+  background: #111;
+  color: #fff;
   padding: 6px 8px;
-  border-radius: 4px;
+  border-radius: 8px;
   font-size: 10px;
   line-height: 1.2;
 
@@ -445,7 +448,7 @@ h3 {
   text-overflow: ellipsis;
 
   z-index: 10;
-  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.4);
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.4);
   pointer-events: none;
 
   /* Default position to the right of the hovered word */
@@ -456,7 +459,13 @@ h3 {
 
   display: inline-block;
   text-align: left;
+  transition: opacity .08s ease-out;
 }
+
+.custom-tooltip[data-pos="right"]  { left: 100%; top: 50%; transform: translate(8px,-50%);  } /* 8px = GAP */
+.custom-tooltip[data-pos="left"]   { right: 100%; top: 50%; transform: translate(-8px,-50%); }
+.custom-tooltip[data-pos="bottom"] { top: 100%; left: 50%; transform: translate(-50%,8px);   }
+.custom-tooltip[data-pos="top"]    { bottom: 100%; left: 50%; transform: translate(-50%,-8px);}
 
 .word.shift-left .custom-tooltip {
   left: auto;
@@ -465,7 +474,7 @@ h3 {
 }
 
 .morph-list {
-  line-height: 0.7;
+  line-height: 1.0;
 }
 
 .word:hover {
