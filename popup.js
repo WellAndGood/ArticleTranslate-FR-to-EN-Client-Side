@@ -90,15 +90,16 @@ document.addEventListener('DOMContentLoaded', () => {
             console.log("articleTitle", articleTitle)
 
 
-            let articleHtml = result.content;         // <-- Readability HTML
-            let articleText = headingsToNewlines(articleHtml); // <-- Plain text w/ heading newlines
+            let articleHtml = result.content;         // <-- Readability HTML --> CAN PARSE THIS FOR SAKE OF HEADINGS
+            let articleText = articleHtml;
+            
+            // let articleText = headingsToNewlines(articleHtml); // <-- Plain text w/ heading newlines
+            // articleText = cleanSpacing(articleText);
+            // articleText = addNewlinesAfterSentences(articleText);
+            // articleText = improveSpacing(articleText);
 
-            articleText = cleanSpacing(articleText);
-            articleText = addNewlinesAfterSentences(articleText);
-            articleText = improveSpacing(articleText);
-
-            output.textContent = articleText;
-            lastExtractedArticle = articleText;
+            output.textContent = articleHtml;
+            lastExtractedArticle = articleText; // Store the extracted article text globally
 
             // ✅ Make export button visible
             exportButton.style.display = "block";

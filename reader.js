@@ -1,5 +1,5 @@
 import { openAgentsDB, openLemmaDB, practiceWord, initializeLemmas, searchAgentsByName, countExactAgent, getAllAgents } from './databasehelpers.js';
-import { numberToWords, markSpelledOutNumbers, numberWords, isHyphenatedNumber } from './helpers.js';
+import { MORPH_MAP, ORDER_BY_POS, normalizeMorph, detectFrenchContraction, numberToWords, markSpelledOutNumbers, numberWords, isHyphenatedNumber } from './helpers.js';
 import { APIKeyObtain } from './hiddenKeys.js';
 
 let wordIndex = 0;  // Global counter across all sentences
@@ -87,7 +87,6 @@ async function loadAndRenderArticle() {
         });
 
         const debug = false; // Set to true to debugging; will reinitialize the personalized Lemma database for the User
-
         console.log("isInitialized:", isInitialized);
         console.log("debug: ", debug);
         console.log("articleText", articleText)
@@ -102,12 +101,14 @@ async function loadAndRenderArticle() {
 
         startLoading();
         try {
-            // ✅ Render title with the same word highlighting logic
-            renderTextBlock(articleTitle, titleContainer, 'h1');
+            // Render title with the word highlighting logic; skip over tag obtaining
+            await renderTextBlock(articleTitle, titleContainer, 'h1');
 
-            // ✅ Render article body
-            renderTextBlock(articleText, contentContainer, 'p');   
-
+            // Render the article text through 
+            const items = getItemsFromPayload(articleText, {lang: 'fr'});
+            await renderFromItems(items, contentContainer, 'p');
+            
+            // Overwriting text elements with agents and numbers
             await markAgentsInAdjacencyList(adjacencyList);
             markProminentNumbers(adjacencyList);  // digit check and mark with .prominent-digit
             attachNumberTooltips(adjacencyList);  // affix a tooltip to .prominent-digit
@@ -116,9 +117,6 @@ async function loadAndRenderArticle() {
             attachNumberHover(adjacencyList);     // affix a tooltip to .prominent-number
         } finally {
             finishLoading();  
-
-            console.log(adjacencyList);
-            console.log(adjacencyList.length, "words rendered in total.");
         }
     });
     chrome.storage.local.remove(['exportedArticle', 'exportedTitle']);
@@ -142,45 +140,7 @@ function finishLoading() {
   ph.style.display = 'none';             // hide the placeholder
   ph.textContent = '';
   apiresp.style.display = 'none'; // hide the API response container
-
 }
-
-// // API CALL - EXPERIMENTAL
-// const apiUrl = "http://127.0.0.1:5000/translate-analyse";
-
-// async function sendArticleTextForAnalysis(articleText) {
-//     try {
-//         const response = await fetch(apiUrl, {
-//             method: "POST",
-//             headers: {
-//                 "Content-Type": "application/json"
-//             },
-//             body: JSON.stringify({
-//                 text: articleText,
-//                 source_lang: "fr",
-//                 target_lang: "en"
-//             })
-//         });
-
-//         if (!response.ok) {
-//             throw new Error(`Server error: ${response.status}`)
-//         }
-
-//         const jsonData = await response.json();
-//         console.log(jsonData);
-
-//         displayResponse(jsonData);
-
-//     } catch (err) {
-//         console.error("Error sending article text for analysis:", err);
-//     }
-// }
-
-// function displayResponse(jsonData) {
-//     const container = document.getElementById("api-response");
-//     container.textContent = JSON.stringify(jsonData, null, 2);
-// }
-
 
 async function loadWordList() {
     const url = chrome.runtime.getURL('v1.3.5-wordFrequency_FR_to_EN.json');
@@ -212,6 +172,26 @@ async function loadWordList() {
     top5000Lemmas = lemmaSet;
 }
 
+function looksLikeHtml(s) {
+    return typeof s === 'string' && /<\/?[a-z][\s\S]*>/i.test(s);
+}
+
+function toSentences(text, lang = 'fr') {
+    const t = String(text).replace(/\u00A0/g, ' ').replace(/\s+/g, ' ').trim();
+    if (!t) return [];
+    if (window.Intl?.Segmenter) {
+        const seg = new Intl.Segmenter(lang, {granularity: 'sentence'});
+        return [...seg.segment(t)].map(s => s.segment.trim()).filter(Boolean);
+    } 
+    return t.split(/(?<=[.!?…»])\s+(?=[«A-Z0-9])/u).map(s => s.trim()).filter(Boolean);
+}
+
+function itemsFromPlainText(text, { lang = 'fr', tag = 'p' } = {}) {
+    return toSentences(text, lang).map((sentence, i) => ({
+        heading: '', level: 0, blockTag: tag, blockOrder: i, sentenceIndex: 0, sentence
+    }));
+}
+
 function normalizeApostrophes(text) {
     return text.replace(/[’‘]/g, "'");  // Replace both curly apostrophe variants with straight '
 }
@@ -220,11 +200,106 @@ function splitIntoSentences(text) {
     return text.match(/[^.!?]+[.!?]+(\s|$)/g) || [text];
 }
 
+function getItemsFromPayload(payload, { lang = 'fr' } = {}) {
+    if (typeof payload === 'string') {
+        try {
+            const items = attributeSentences(payload, { lang });
+            if (items.length) return items;
+        } catch (e) {
+            // fall back
+            console.error("Error parsing payload as HTML:", e);
+        }
+        return itemsFromPlainText(payload, { lang, tag: 'p' });
+    }
+    return itemsFromPlainText(String(payload ?? ''), { lang, tag: 'p'});
+}
+
+function parseHtmlFragment(html) {
+  const tpl = document.createElement('template');
+  tpl.innerHTML = String(html).trim();   // browser handles entities like &nbsp;
+  return tpl.content;                    // DocumentFragment
+}
+
+function attributeSentences(html, {lang = 'fr'} = {}) {
+    // const doc = new DOMParser().parseFromString(String(html), 'text/html');
+    const root = parseHtmlFragment(html);
+    root.querySelectorAll('aside, nav, footer, .related, .newsletter, .promo').forEach(n => n.remove());
+
+    const nodes = [...root.querySelectorAll('h1,h2,h3,h4,h5,h6,p,li,blockquote')];
+    const items = [];
+    let ctxHeading = '';
+    let ctxLevel = 0;
+
+    let current = { text: '', level: 0};
+
+    for (const el of nodes) {
+        const tag = el.tagName.toLowerCase();
+        const text = el.textContent.trim();
+        
+        if (/^H[1-6]$/.test(tag)) {
+            const level = parseInt(tag[1], 10);
+            const sentences = toSentences(text, lang);
+
+            (sentences.length ? sentences : [text]).forEach((s, sentenceIndex) => {
+                items.push({
+                    blockTag: tag,
+                    sentence: s,
+                    sentenceIndex,
+                    heading: text,
+                    level,
+                    isHeading: true
+                })
+            });
+            ctxHeading = text;
+            ctxLevel = level;
+            continue;
+        }
+        
+        // Non-heading blocks; attach current heading context
+        const sentences = toSentences(text, lang);
+        sentences.forEach((s, sentenceIndex) => {
+            items.push({
+                blockTag: tag,
+                sentence: s,
+                sentenceIndex,
+                heading: ctxHeading,
+                level: ctxLevel,
+                isHeading: false
+            });
+        });
+    }
+    return items;
+}
+
+async function renderFromItems(items, container, defaultWrapper = 'p') {
+    const tasks = [];
+
+    let lastHeadingKey = null;
+    for (const it of items) {
+        const headingKey = `${it.level}::${it.heading}`;
+        if (it.heading && headingKey !== lastHeadingKey) {
+            const hTag = 'h' + Math.min(Math.max(it.level || 2, 1), 6);
+            const h = document.createElement(hTag);
+            h.textContent = it.heading;
+            container.appendChild(h);
+            lastHeadingKey = headingKey;
+        }
+
+        const tag = it.blockTag || defaultWrapper;
+        const block = document.createElement(tag);
+        block.classList.add('sentence-block');
+        block.dataset.heading = it.heading || '';
+        block.dataset.level = String(it.level || 0);
+        block.dataset.blockTag = tag;
+
+        container.appendChild(block);
+        tasks.push(await fillSentenceBlock(block, it.sentence, tag));
+    }
+    await Promise.all(tasks);
+}
+
 async function renderTextBlock(text, containerElement, wrapperTag = 'p') {
-
     const sentences = splitIntoSentences(text);
-    console.log(sentences);
-
     const blocks = sentences.map(() => {
         const b = document.createElement(wrapperTag);
         b.classList.add('sentence-block');
@@ -242,174 +317,226 @@ async function renderTextBlock(text, containerElement, wrapperTag = 'p') {
 }
 
 async function fillSentenceBlock(block, sentence, wrapperTag) { 
+    
+    const containerElement = block.closest('.article-container') ||      // prefer a named wrapper if you have one
+    (block.isConnected ? block.parentElement : null) ||
+    document.body;
+    
     // 🎤 Create speaker button
-        const speakerBtn = document.createElement('button');
-        speakerBtn.classList.add('sentence-speak-btn');
-        speakerBtn.textContent = '🔊';
-        block.appendChild(speakerBtn);
+    const speakerBtn = document.createElement('button');
+    speakerBtn.classList.add('sentence-speak-btn');
+    speakerBtn.textContent = '🔊';
+    block.appendChild(speakerBtn);
 
-        const sentenceSpacy = await sendToSpacy(sentence);
+    const sentenceSpacy = await sendToSpacy(sentence);
 
-        const sentenceIndexes = [];
+    const sentenceIndexes = [];
 
-        const p = document.createElement('p');
+    const p = document.createElement('p');
 
-        sentenceSpacy.forEach(token => {
+    sentenceSpacy.forEach(token => {
 
-            const isHyphen = token.text === '-' || token.text === '‐' || token.text === '-'; // U+2010/U+2011 too
-            const isPunct = token.is_punct || isHyphen;
+        const isHyphen = token.text === '-' || token.text === '‐' || token.text === '-'; // U+2010/U+2011 too
+        const isPunct = token.is_punct || isHyphen;
 
-            if (isHyphen) {
-                const wordDiv = document.createElement('div');
-                wordDiv.classList.add('word');
+        if (isHyphen) {
+            const wordDiv = document.createElement('div');
+            wordDiv.classList.add('word');
 
-                const wordTextSpan = document.createElement('span');
-                wordTextSpan.classList.add('word-text');
-                wordTextSpan.textContent = '-'; // ✅ set the visible hyphen
+            const wordTextSpan = document.createElement('span');
+            wordTextSpan.classList.add('word-text');
+            wordTextSpan.textContent = '-'; // ✅ set the visible hyphen
 
-                wordDiv.appendChild(wordTextSpan);
-                addTranslation(wordDiv, '-');
-                block.appendChild(wordDiv); // no surrounding spaces
-                return;
-            }
+            wordDiv.appendChild(wordTextSpan);
+            addTranslation(wordDiv, '-');
+            block.appendChild(wordDiv); // no surrounding spaces
+            return;
+        }
 
-            const parts = getLemmaRankWithParts(token.lemma);
+        const parts = getLemmaRankWithParts(token.lemma);
 
-            if (parts) {
-                parts.forEach(part => {
-                    const wordDiv = document.createElement('div');
-                    wordDiv.classList.add('word');
-
-                    const currentIndex = wordIndex++;
-                    wordDiv.setAttribute('data-name', token.text);
-                    wordDiv.setAttribute('data-index', currentIndex);
-                    wordDiv.setAttribute('data-eng-lemma', part.lemma);
-
-                    // Create child container for the text
-                    const wordTextSpan = document.createElement('span');
-                    wordTextSpan.classList.add('word-text');
-                    wordTextSpan.textContent = token.text_with_ws;
-                    wordDiv.appendChild(wordTextSpan);
-                    
-                    // add the always-visible translation line
-                    addTranslation(wordDiv, part.lemma);
-
-                    // If ranked, highlight & attach tooltip logic
-                    if (part.rank !== 9999) {
-                        wordDiv.classList.add('highlighted-word');
-                        wordDiv.classList.add(getRankColorClass(part.rank));
-                        const posFull = posMap[part.pos] || "Unknown POS";
-
-                        wordDiv.addEventListener('mouseenter', () => {
-                            const tooltip = document.createElement('div');
-                            tooltip.className = 'custom-tooltip';
-                            tooltip.innerHTML = `
-                                <strong>Word:</strong> ${token.text}<br/>
-                                <strong>Base Word:</strong> ${token.lemma}<br/>    
-                                <strong>Rank:</strong> ${part.rank} - <strong>Lemma:</strong> ${part.lemma}<br/>
-                                <strong>Part of Speech:</strong> ${posFull}`;
-                            wordDiv.appendChild(tooltip);
-                        });
-
-                        wordDiv.addEventListener('mouseleave', () => {
-                            const existingTooltip = wordDiv.querySelector('.custom-tooltip');
-                            if (existingTooltip) existingTooltip.remove();
-                        });
-
-                        // Add pos-badge as separate child
-                        const posBadge = document.createElement('div');
-                        posBadge.classList.add('pos-badge');
-                        posBadge.textContent = posBadgeIcons[part.pos] || "?";
-                        wordDiv.appendChild(posBadge);
-                    }
-
-                    // Save to adjacency list
-                    adjacencyList.push({
-                        index: currentIndex,
-                        text: token.text,
-                        element: wordDiv
-                    });
-
-                    // Ensure tooltip doesn’t overflow viewport
-                    setTimeout(() => {
-                        const rect = wordDiv.getBoundingClientRect();
-                        const tooltipWidth = 300;
-                        const viewportRight = window.innerWidth;
-                        if (rect.right + tooltipWidth + 20 > viewportRight) {
-                            wordDiv.classList.add('shift-left');
-                        }
-                    }, 0);
-
-                    wordDiv.addEventListener('click', () => {
-                        wordDiv.classList.toggle('active');
-                    });
-
-                    block.appendChild(wordDiv);
-                    block.appendChild(document.createTextNode(' '));
-
-                    sentenceIndexes.push(currentIndex);
-                });
-            } else {
-                // fallback for words without `parts`
+        if (parts) {
+            parts.forEach(part => {
                 const wordDiv = document.createElement('div');
                 wordDiv.classList.add('word');
 
                 const currentIndex = wordIndex++;
                 wordDiv.setAttribute('data-name', token.text);
                 wordDiv.setAttribute('data-index', currentIndex);
+                wordDiv.setAttribute('data-eng-lemma', part.lemma);
 
-                // create child for plain text
+                // Create child container for the text
                 const wordTextSpan = document.createElement('span');
                 wordTextSpan.classList.add('word-text');
                 wordTextSpan.textContent = token.text_with_ws;
                 wordDiv.appendChild(wordTextSpan);
+                
+                // add the always-visible translation line
+                addTranslation(wordDiv, part.lemma);
 
-                // Use token.text (or your own map) as the literal translation
-                addTranslation(wordDiv, token.text);
+                const morphStr = morphToEnglish(token.morph, token.pos, token.text);
 
+                // If ranked, highlight & attach tooltip logic
+                if (part.rank !== 9999) {
+                    wordDiv.classList.add('highlighted-word');
+                    wordDiv.classList.add(getRankColorClass(part.rank));
+                    const posFull = posMap[part.pos] || "Unknown POS";
+
+                    wordDiv.addEventListener('mouseenter', () => {
+                        const tooltip = document.createElement('div');
+                        tooltip.className = 'custom-tooltip';
+                        tooltip.innerHTML = `
+                            <strong>Rank:</strong> ${part.rank} - <strong>Lemma:</strong> ${part.lemma}<br/>
+                            <strong>Part of Speech:</strong> ${posFull}<br/><br/>
+                            <strong>Morphological Features:</strong><br/><li>${morphStr.replace(/,\s*/g, '</li><br><li class="morph-list">') || 'N/A'}</li>`;
+                        wordDiv.appendChild(tooltip);
+                    });
+
+                    wordDiv.addEventListener('mouseleave', () => {
+                        const existingTooltip = wordDiv.querySelector('.custom-tooltip');
+                        if (existingTooltip) existingTooltip.remove();
+                    });
+
+                    // Add pos-badge as separate child
+                    const posBadge = document.createElement('div');
+                    posBadge.classList.add('pos-badge');
+                    posBadge.textContent = posBadgeIcons[part.pos] || "?";
+                    wordDiv.appendChild(posBadge);
+                }
+
+                // Save to adjacency list
                 adjacencyList.push({
                     index: currentIndex,
                     text: token.text,
                     element: wordDiv
                 });
 
+                // Ensure tooltip doesn’t overflow viewport
+                setTimeout(() => {
+                    const rect = wordDiv.getBoundingClientRect();
+                    const tooltipWidth = 300;
+                    const viewportRight = window.innerWidth;
+                    if (rect.right + tooltipWidth + 20 > viewportRight) {
+                        wordDiv.classList.add('shift-left');
+                    }
+                }, 0);
+
+                wordDiv.addEventListener('click', () => {
+                    wordDiv.classList.toggle('active');
+                });
+
                 block.appendChild(wordDiv);
                 block.appendChild(document.createTextNode(' '));
 
                 sentenceIndexes.push(currentIndex);
-            }
-        });
+            });
+        } else {
+            // fallback for words without `parts`
+            const wordDiv = document.createElement('div');
+            wordDiv.classList.add('word');
 
-        // 🎤 Attach click to speaker button
-        speakerBtn.addEventListener('click', () => {
-            // clear previous
-            selectedIndexes.clear();
+            const currentIndex = wordIndex++;
+            wordDiv.setAttribute('data-name', token.text);
+            wordDiv.setAttribute('data-index', currentIndex);
 
-            // select sentence words
-            sentenceIndexes.forEach(idx => selectedIndexes.add(String(idx)));
+            // create child for plain text
+            const wordTextSpan = document.createElement('span');
+            wordTextSpan.classList.add('word-text');
+            wordTextSpan.textContent = token.text_with_ws;
+            wordDiv.appendChild(wordTextSpan);
 
-            highlightSelectedWords(containerElement); // updates UI
+            // Use token.text (or your own map) as the literal translation
+            addTranslation(wordDiv, token.text);
 
-            speakSelectedWords(); // speaks them
-        });
+            adjacencyList.push({
+                index: currentIndex,
+                text: token.text,
+                element: wordDiv
+            });
 
-        containerElement.appendChild(block);
-        
-        if (useGoogleTranslate) {
-            // A div to display the translated sentence
-            const translatedSentence = await translateSentence(sentence, 'en');
-            const translateBlock = document.createElement(wrapperTag);
-            translateBlock.classList.add('translate-sentence-block');
+            block.appendChild(wordDiv);
+            block.appendChild(document.createTextNode(' '));
 
-            // Places that div beneath the word-by-word native-language display
-            const translationLabel = document.createElement('div');
-            translationLabel.classList.add('sentence-translation');
-            translationLabel.textContent = translatedSentence;
-            console.log(translatedSentence);
-            translateBlock.appendChild(translationLabel);
-            block.appendChild(translateBlock);
+            sentenceIndexes.push(currentIndex);
         }
+    });
+
+    // 🎤 Attach click to speaker button
+    speakerBtn.addEventListener('click', () => {
+        // clear previous
+        selectedIndexes.clear();
+
+        // select sentence words
+        sentenceIndexes.forEach(idx => selectedIndexes.add(String(idx)));
+
+        highlightSelectedWords(containerElement); // updates UI
+
+        speakSelectedWords(); // speaks them
+    });
+    
+    if (useGoogleTranslate) {
+        // A div to display the translated sentence
+        const translatedSentence = await translateSentence(sentence, 'en');
+        const translateBlock = document.createElement(wrapperTag);
+        translateBlock.classList.add('translate-sentence-block');
+
+        // Places that div beneath the word-by-word native-language display
+        const translationLabel = document.createElement('div');
+        translationLabel.classList.add('sentence-translation');
+        translationLabel.textContent = translatedSentence;
+        translateBlock.appendChild(translationLabel);
+        block.appendChild(translateBlock);
+    }
 }
+
+
+function morphToEnglish(morphIn, pos = "", tokenText = "") {
+  const morph = normalizeMorph(morphIn);
+  const order = ORDER_BY_POS[pos] || ORDER_BY_POS.default;
+
+  const seen = new Set();
+  const parts = [];
+
+  // Prettifying phrasing per key
+  const phraseFor = (k, v) => {
+    const label = MORPH_MAP[k]?.[v] || v; // fall back to raw
+    switch (k) {
+      case "VerbForm": return `${label} verb`;
+      case "Mood":     return `${label} mood`;
+      case "Tense":    return `${label} tense`;
+      case "Aspect":   return `${label} aspect`;
+      case "Voice":    return `${label} voice`;
+      case "Polarity": return label;
+      case "Poss":     return "possessive";
+      case "Reflex":   return "reflexive";
+      case "NumType":  return `${label} numeral`;
+      case "Case":     return `${label} case`;
+      default:         return label;
+    }
+  };
+
+  // Ordered keys first
+  for (const k of order) {
+    const v = morph[k];
+    if (v != null) {
+      parts.push(phraseFor(k, v));
+      seen.add(k);
+    }
+  }
+  // Any remaining keys
+  for (const [k, v] of Object.entries(morph)) {
+    if (!seen.has(k)) parts.push(phraseFor(k, v));
+  }
+
+  // Heuristic: French contractions
+  const contraction = detectFrenchContraction(tokenText, pos, morph);
+  if (contraction) parts.unshift(`contraction ${contraction}`);
+
+  // Collapse to a sentence
+  const str = parts.join(", ").replace(/\s+/g, " ").trim();
+  return str ? str[0].toUpperCase() + str.slice(1) : "";
+}
+
 
 
 function addTranslation(wordDiv, englishLemmaText) {
@@ -832,8 +959,6 @@ function speakWord(word = "") {
         text = word;
     }
 
-    console.log(word);
-
     const rate = parseFloat(document.getElementById('speechRate').value);
     const pitch = parseFloat(document.getElementById('speechPitch').value);
 
@@ -942,7 +1067,6 @@ function getLemmaRankWithParts(word) {
             const suffixEntry = getWordEntry(suffix);
 
             if (baseEntry && suffixEntry) {
-                // console.log(`Contraction fallback: "${word}" → "${base}" + "${suffixPart}"`);
                 return [
                     {
                         text: base,
@@ -967,7 +1091,6 @@ function getLemmaRankWithParts(word) {
         const partEntries = parts.map(part => getWordEntry(part));
 
         if (partEntries.every(e => e)) {
-            // console.log(`Hyphen fallback: "${word}" → Parts:`, parts);
             return parts.map((part, idx) => ({
                 text: part,
                 rank: parseInt(partEntries[idx].rank),
@@ -1147,8 +1270,6 @@ function showSpeechPanel() {
         const textSpan = wordDiv?.querySelector('.word-text');
         return textSpan ? textSpan.textContent.trim() : '';
     }).join(' ').replace(/' /g, "'").replace(/’ /g, "'");
-
-    console.log(selectedWords);
 
     document.getElementById('speechText').textContent = selectedWords;
 

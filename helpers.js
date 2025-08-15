@@ -155,3 +155,65 @@ export async function practiceLemma(lemma) {
     console.log(`Practiced ${lemma}`);
   };
 }
+
+export const MORPH_MAP = {
+  Definite: { Def: "definite", Ind: "indefinite", Cons: "construct" },
+  PronType: { Art: "article", Prs: "personal pronoun", Dem: "demonstrative",
+              Rel: "relative", Int: "interrogative", Ind: "indefinite",
+              Neg: "negative", Tot: "quantifier", Rcp: "reciprocal" },
+  Gender:   { Masc: "masculine", Fem: "feminine", Com: "common", Neut: "neuter" },
+  Number:   { Sing: "singular", Plur: "plural", Dual: "dual" },
+  Person:   { "1": "first person", "2": "second person", "3": "third person" },
+  Tense:    { Pres: "present", Past: "past", Fut: "future", Imp: "imperfect", Pqp: "pluperfect" },
+  Mood:     { Ind: "indicative", Sub: "subjunctive", Cnd: "conditional", Imp: "imperative" },
+  VerbForm: { Fin: "finite", Inf: "infinitive", Part: "participle", Ger: "gerund" },
+  Aspect:   { Imp: "imperfective", Perf: "perfective", Prog: "progressive",
+              Hab: "habitual", Prosp: "prospective" },
+  Voice:    { Act: "active", Pass: "passive", Mid: "middle" },
+  Degree:   { Pos: "positive", Cmp: "comparative", Sup: "superlative" },
+  Polarity: { Neg: "negative", Pos: "affirmative" },
+  Poss:     { Yes: "possessive" },
+  Reflex:   { Yes: "reflexive" },
+  NumType:  { Card: "cardinal", Ord: "ordinal", Frac: "fraction",
+              Mult: "multiplicative", Sets: "collective", Dist: "distributive" },
+  Case:     { Nom: "nominative", Acc: "accusative", Dat: "dative", Gen: "genitive",
+              Abl: "ablative", Loc: "locative", Ins: "instrumental", Voc: "vocative",
+              Par: "partitive" }
+};
+
+export const ORDER_BY_POS = {
+  NOUN: ["Gender","Number","Case"],
+  PROPN: ["Gender","Number","Case"],
+  ADJ: ["Degree","Gender","Number"],
+  PRON: ["PronType","Person","Gender","Number","Case","Poss","Reflex","Polarity"],
+  DET: ["Definite","PronType","Gender","Number"],
+  VERB: ["VerbForm","Mood","Tense","Aspect","Voice","Person","Number","Polarity"],
+  AUX: ["VerbForm","Mood","Tense","Aspect","Voice","Person","Number","Polarity"],
+  ADV: ["Degree","Polarity"],
+  NUM: ["NumType","Number"],
+  default: ["PronType","Definite","VerbForm","Mood","Tense","Aspect","Voice","Person","Number","Gender","Case","Degree","Polarity","Poss","Reflex","NumType"]
+};
+
+export function normalizeMorph(morph) {
+  if (!morph) return {};
+  if (typeof morph === "string") {
+    return Object.fromEntries(
+      morph.split("|").map(pair => {
+        const [k, v] = pair.split("=");
+        return [k, v];
+      })
+    );
+  }
+  return morph; // already an object
+}
+
+export function detectFrenchContraction(text, pos, morph) {
+  const t = (text || "").toLowerCase();
+  if (pos === "ADP" && morph?.Definite) {
+    if (t === "du")  return "de + le";
+    if (t === "au")  return "à + le";
+    if (t === "aux") return "à + les";
+  }
+  if (t === "des" && morph?.Number === "Plur") return "de + les (or plural article)";
+  return "";
+}

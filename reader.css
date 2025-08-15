@@ -86,6 +86,11 @@
   line-height: 2.0;
 }
 
+h2, h3, h4, h5, h6 {
+  margin-top: .35rem;
+  font-style: italic;
+}
+
 body {
   display: flex;
   flex-direction: row;
@@ -457,6 +462,10 @@ h3 {
   left: auto;
   right: 100%;
   transform: translateX(-8px);
+}
+
+.morph-list {
+  line-height: 0.7;
 }
 
 .word:hover {
